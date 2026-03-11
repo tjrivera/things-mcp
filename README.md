@@ -125,6 +125,33 @@ After installation:
 - `show-item` - Show a specific item or list in Things
 - `search-items` - Search for items in Things
 
+### Verified Write Behavior
+
+`add-todo` now uses read-after-write verification instead of returning optimistic success as soon as the Things URL Scheme is opened.
+
+- The server issues the create request through the Things URL Scheme
+- It then reads Things back using search and recent-item queries
+- It only reports success if the new todo can be uniquely confirmed
+- If the todo cannot be confirmed, or multiple candidates match, the tool raises an error instead of returning a false-positive success
+
+On success, `add-todo` returns structured data rather than a plain confirmation string:
+
+```json
+{
+  "ok": true,
+  "requested": true,
+  "verified": true,
+  "id": "todo-uuid",
+  "title": "Call contractor",
+  "notes": "Ask about land grading quote",
+  "deadline": "2026-03-20",
+  "tags": ["errands"],
+  "verification_source": "search_todos:title"
+}
+```
+
+Verification currently matches on the todo title plus any provided `notes`, `deadline`, and `tags`. This makes the result materially safer for agents and automations, but duplicate titles can still be ambiguous when the payload is otherwise sparse.
+
 ## Tool Parameters
 
 ### get-todos
@@ -144,6 +171,18 @@ After installation:
 
 ### get-recent
 - `period` - Time period (e.g., '3d', '1w', '2m', '1y')
+
+### add-todo
+- `title` - Todo title
+- `notes` (optional) - Notes for the todo
+- `when` (optional) - Schedule value such as `today`, `tomorrow`, or `YYYY-MM-DD`
+- `deadline` (optional) - Deadline in `YYYY-MM-DD` format
+- `tags` (optional) - Tags to add
+- `checklist_items` (optional) - Checklist items to add
+- `list_id` / `list_title` (optional) - Project or area to add the todo to
+- `heading` / `heading_id` (optional) - Heading to place the todo under
+
+`add-todo` raises an error when it cannot confirm that the new item was actually created in Things.
 
 ## Manual Installation
 
@@ -265,6 +304,62 @@ git pull
 uv sync
 ```
 Then restart Claude.
+
+## HTTP Server Mode
+
+For remote access from other machines (e.g., over a Tailscale network), you can run the server in HTTP mode instead of the default stdio mode.
+
+### Running HTTP Server Manually
+
+```bash
+THINGS_MCP_TRANSPORT=http uv run things_server.py
+```
+
+The server will start on `http://0.0.0.0:8718/mcp` by default.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `THINGS_MCP_TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
+| `THINGS_MCP_HOST` | `0.0.0.0` | Bind address for HTTP mode |
+| `THINGS_MCP_PORT` | `8718` | Port for HTTP mode |
+| `THINGS_MCP_LOG_LEVEL` | `INFO` | Log level |
+
+### Running as a macOS Service
+
+A launchd plist is provided to run the HTTP server automatically on startup:
+
+```bash
+# Copy the plist to LaunchAgents (edit paths if needed)
+cp launchd/com.things-mcp.server.plist ~/Library/LaunchAgents/
+
+# Load and start the service
+launchctl load ~/Library/LaunchAgents/com.things-mcp.server.plist
+launchctl start com.things-mcp.server
+
+# Check status
+launchctl list | grep things-mcp
+
+# View logs
+tail -f /tmp/things-mcp.log
+tail -f /tmp/things-mcp.error.log
+
+# Stop and unload the service
+launchctl stop com.things-mcp.server
+launchctl unload ~/Library/LaunchAgents/com.things-mcp.server.plist
+```
+
+**Note**: The provided plist contains hardcoded paths. Edit `~/Library/LaunchAgents/com.things-mcp.server.plist` to match your installation location if different.
+
+### Connecting from Remote Clients
+
+Once running in HTTP mode, the server is accessible at:
+```
+http://<your-ip-or-hostname>:8718/mcp
+```
+
+For Tailscale users, use your Tailscale IP or MagicDNS hostname.
 
 ## Development
 

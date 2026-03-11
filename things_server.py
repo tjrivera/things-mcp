@@ -1,5 +1,8 @@
-from typing import List
+import asyncio
 import logging
+import os
+from typing import Any, List
+
 import things
 from fastmcp import FastMCP
 from formatters import format_todo, format_project, format_area, format_tag
@@ -11,6 +14,102 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastMCP server
 mcp = FastMCP("Things")
+
+VERIFY_WRITE_ATTEMPTS = 4
+VERIFY_WRITE_DELAY_SECONDS = 0.2
+
+
+def _normalize_tags(tags: list[str] | None) -> set[str]:
+    """Normalize tag lists for comparison."""
+    return {tag.strip().lower() for tag in tags or [] if tag and tag.strip()}
+
+
+def _todo_matches_request(
+    todo: dict[str, Any],
+    *,
+    title: str,
+    notes: str | None,
+    deadline: str | None,
+    tags: list[str] | None,
+) -> bool:
+    """Return True when a todo appears to match the requested creation payload."""
+    if (todo.get("title") or "").strip() != title.strip():
+        return False
+    if notes is not None and (todo.get("notes") or "") != notes:
+        return False
+    if deadline is not None and (todo.get("deadline") or "") != deadline:
+        return False
+    requested_tags = _normalize_tags(tags)
+    if requested_tags:
+        todo_tags = _normalize_tags(todo.get("tags", []))
+        if not requested_tags.issubset(todo_tags):
+            return False
+    return True
+
+
+def _find_matching_todos(
+    todos: list[dict[str, Any]],
+    *,
+    title: str,
+    notes: str | None,
+    deadline: str | None,
+    tags: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Filter candidate todos down to those matching the requested fields."""
+    return [
+        todo for todo in todos
+        if _todo_matches_request(
+            todo,
+            title=title,
+            notes=notes,
+            deadline=deadline,
+            tags=tags,
+        )
+    ]
+
+
+async def _verify_created_todo(
+    *,
+    title: str,
+    notes: str | None,
+    deadline: str | None,
+    tags: list[str] | None,
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Read back Things state until a created todo can be confirmed."""
+    last_error: str | None = None
+
+    for _ in range(VERIFY_WRITE_ATTEMPTS):
+        search_results = things.search(title, include_items=True)
+        matched = _find_matching_todos(
+            search_results or [],
+            title=title,
+            notes=notes,
+            deadline=deadline,
+            tags=tags,
+        )
+        if len(matched) == 1:
+            return matched[0], "search_todos:title", None
+        if len(matched) > 1:
+            last_error = f"Multiple matching todos found for title '{title}'"
+        elif search_results:
+            last_error = f"Found todos for '{title}', but none matched the full payload"
+
+        recent_results = things.last("1d", include_items=True)
+        recent_matched = _find_matching_todos(
+            recent_results or [],
+            title=title,
+            notes=notes,
+            deadline=deadline,
+            tags=tags,
+        )
+        if len(recent_matched) == 1:
+            return recent_matched[0], "get_recent:1d", None
+        if len(recent_matched) > 1:
+            last_error = f"Multiple recent todos matched title '{title}'"
+
+        await asyncio.sleep(VERIFY_WRITE_DELAY_SECONDS)
+
+    return None, None, last_error
 
 # List view tools
 @mcp.tool
@@ -266,9 +365,9 @@ async def add_todo(
     list_title: str = None,
     heading: str = None,
     heading_id: str = None
-) -> str:
-    """Create a new todo in Things
-    
+) -> dict[str, Any]:
+    """Create a new todo in Things and verify that it was persisted.
+
     Args:
         title: Title of the todo
         notes: Notes for the todo
@@ -280,6 +379,13 @@ async def add_todo(
         list_title: Title of project/area to add to
         heading: Heading title to add under
         heading_id: Heading ID to add under (takes precedence over heading)
+
+    Returns:
+        Structured metadata for the created todo after read-after-write verification.
+
+    Raises:
+        RuntimeError: If the create request is issued but the new todo cannot be
+            uniquely confirmed in Things.
     """
     url = url_scheme.add_todo(
         title=title,
@@ -294,7 +400,29 @@ async def add_todo(
         heading_id=heading_id
     )
     url_scheme.execute_url(url)
-    return f"Created new todo: {title}"
+    created_todo, verification_source, verification_error = await _verify_created_todo(
+        title=title,
+        notes=notes,
+        deadline=deadline,
+        tags=tags,
+    )
+    if created_todo is None:
+        raise RuntimeError(
+            "Todo creation request was issued, but the created item could not be confirmed "
+            f"in Things. {verification_error or ''}".strip()
+        )
+
+    return {
+        "ok": True,
+        "requested": True,
+        "verified": True,
+        "id": created_todo.get("uuid"),
+        "title": created_todo.get("title", title),
+        "notes": created_todo.get("notes"),
+        "deadline": created_todo.get("deadline"),
+        "tags": created_todo.get("tags", []),
+        "verification_source": verification_source,
+    }
 
 @mcp.tool
 async def add_project(
@@ -449,4 +577,13 @@ async def search_items(query: str) -> str:
     return f"Searching for '{query}'"
 
 if __name__ == "__main__":
-    mcp.run()
+    transport = os.environ.get("THINGS_MCP_TRANSPORT", "stdio")
+
+    if transport == "http":
+        host = os.environ.get("THINGS_MCP_HOST", "0.0.0.0")
+        port = int(os.environ.get("THINGS_MCP_PORT", "8718"))
+        log_level = os.environ.get("THINGS_MCP_LOG_LEVEL", "INFO")
+        print(f"Starting Things MCP server on http://{host}:{port}/mcp")
+        mcp.run(transport="http", host=host, port=port, log_level=log_level)
+    else:
+        mcp.run()
