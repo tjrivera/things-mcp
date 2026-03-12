@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.things-mcp.server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO_DIR__/scripts/run_http_server_tmux.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO_DIR__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>THINGS_MCP_TRANSPORT</key>
+        <string>http</string>
+        <key>THINGS_MCP_HOST</key>
+        <string>0.0.0.0</string>
+        <key>THINGS_MCP_PORT</key>
+        <string>8718</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/things-mcp.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/things-mcp.error.log</string>
+</dict>
+</plist>

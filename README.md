@@ -328,29 +328,28 @@ The server will start on `http://0.0.0.0:8718/mcp` by default.
 
 ### Running as a macOS Service
 
-A launchd plist is provided to run the HTTP server automatically on startup:
+A launchd plist template and helper scripts are provided to run the HTTP server automatically on startup:
 
 ```bash
-# Copy the plist to LaunchAgents (edit paths if needed)
-cp launchd/com.things-mcp.server.plist ~/Library/LaunchAgents/
+# Install the LaunchAgent into ~/Library/LaunchAgents with your actual repo path
+./scripts/install_launch_agent.sh
 
-# Load and start the service
-launchctl load ~/Library/LaunchAgents/com.things-mcp.server.plist
-launchctl start com.things-mcp.server
+# Reload the service cleanly
+./scripts/reload_launch_agent.sh
 
 # Check status
-launchctl list | grep things-mcp
+./scripts/status_launch_agent.sh
 
 # View logs
 tail -f /tmp/things-mcp.log
 tail -f /tmp/things-mcp.error.log
 
 # Stop and unload the service
-launchctl stop com.things-mcp.server
 launchctl unload ~/Library/LaunchAgents/com.things-mcp.server.plist
+tmux kill-session -t things-mcp-http
 ```
 
-**Note**: The provided plist contains hardcoded paths. Edit `~/Library/LaunchAgents/com.things-mcp.server.plist` to match your installation location if different.
+The launchd helper uses a detached `tmux` session internally because direct launchd startup can be flaky with the HTTP server on macOS. Launchd supervises the tmux session, and the tmux session holds the actual MCP server process.
 
 ### Connecting from Remote Clients
 
